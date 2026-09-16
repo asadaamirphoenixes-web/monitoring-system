@@ -31,6 +31,17 @@ class SpeedCheckResult:
 
 
 @dataclass
+class WholeClipEstimateResult:
+    """A rough range check, NOT a precise measurement - see
+    GroundTruth.manual_whole_clip_estimate. Never gates the run."""
+    cls_name: str
+    predicted_total: int
+    range_min: int
+    range_max: int
+    status: str   # "within range" | "outside range"
+
+
+@dataclass
 class ClipResult:
     clip_name: str
     condition: str
@@ -39,6 +50,7 @@ class ClipResult:
     count_results: List[CountResult] = field(default_factory=list)
     speed_results: List[SpeedCheckResult] = field(default_factory=list)
     fragmentation: Dict[str, Optional[float]] = field(default_factory=dict)
+    whole_clip_estimate_results: List[WholeClipEstimateResult] = field(default_factory=list)
     skipped_checks: List[str] = field(default_factory=list)
     gate_failures: List[str] = field(default_factory=list)
     speed_mae: Optional[float] = None

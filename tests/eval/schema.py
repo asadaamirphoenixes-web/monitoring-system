@@ -46,6 +46,16 @@ class GroundTruth:
     site_config: str
     manual_line_counts: Dict[str, Dict[str, int]] = field(default_factory=dict)
     known_speed_checks: List[SpeedCheck] = field(default_factory=list)
+    # A weaker, whole-clip-total estimate - {class: [min, max]} - for when
+    # nobody has done a careful per-line frame-by-frame count, just a rough
+    # sanity check from watching the clip once (e.g. sparse sampling, no
+    # line-crossing granularity). Deliberately a SEPARATE field from
+    # manual_line_counts, never merged into it: forcing a rough whole-clip
+    # guess into the precise per-line-crossing MAE metric would misrepresent
+    # what it actually is. See report.py - this is rendered as its own
+    # low-confidence range check, never with the same weight as a real
+    # count MAE, and it never participates in the pass/fail gate.
+    manual_whole_clip_estimate: Dict[str, List[int]] = field(default_factory=dict)
     notes: str = ""
     source_path: Optional[Path] = None
 
@@ -68,6 +78,7 @@ class GroundTruth:
             site_config=raw["site_config"],
             manual_line_counts=raw.get("manual_line_counts", {}),
             known_speed_checks=checks,
+            manual_whole_clip_estimate=raw.get("manual_whole_clip_estimate", {}),
             notes=raw.get("notes", ""),
             source_path=path,
         )

@@ -29,7 +29,12 @@ from src.detector import Detector, MockDetector, YoloDetector  # noqa: E402
 from src.pipeline import TrafficRadar  # noqa: E402
 from tests.eval.detections_io import load_detections_script  # noqa: E402
 from tests.eval.report import render_markdown, render_terminal  # noqa: E402
-from tests.eval.results import ClipResult, CountResult, SpeedCheckResult  # noqa: E402
+from tests.eval.results import (  # noqa: E402
+    ClipResult,
+    CountResult,
+    SpeedCheckResult,
+    WholeClipEstimateResult,
+)
 from tests.eval.schema import GroundTruth, SpeedCheck  # noqa: E402
 
 # fail if any clip's per-class count error exceeds this share of the manual count
@@ -71,6 +76,10 @@ def evaluate_clip(gt_path: Path, clips_dir: Path) -> ClipResult:
         skipped.append("no manual_line_counts provided - count metrics not measured")
     if not gt.known_speed_checks:
         skipped.append("no known_speed_checks provided - speed metrics not measured")
+    if not gt.manual_whole_clip_estimate:
+        skipped.append(
+            "no manual_whole_clip_estimate provided - whole-clip range check not measured"
+        )
 
     if not clip_path.exists():
         skipped.append(f"video file missing - drop it at {clip_path} to evaluate this clip")
@@ -96,6 +105,9 @@ def evaluate_clip(gt_path: Path, clips_dir: Path) -> ClipResult:
     count_results = _count_results(gt.manual_line_counts, predicted)
     speed_results = _resolve_speed_checks(gt.known_speed_checks, count_events)
     fragmentation = _fragmentation_ratios(count_events)
+    whole_clip_results = _whole_clip_estimate_results(
+        gt.manual_whole_clip_estimate, count_events
+    )
 
     gate_failures: List[str] = []
     for cr in count_results:
@@ -119,7 +131,9 @@ def evaluate_clip(gt_path: Path, clips_dir: Path) -> ClipResult:
     return ClipResult(
         clip_name=gt.clip, condition=gt.condition, detector_mode=mode, notes=gt.notes,
         count_results=count_results, speed_results=speed_results,
-        fragmentation=fragmentation, skipped_checks=skipped,
+        fragmentation=fragmentation, whole_clip_estimate_results=whole_clip_results,
+        skipped_checks=skipped,
+        # deliberately not folded into gate_failures - see WholeClipEstimateResult
         gate_failures=gate_failures, speed_mae=speed_mae,
     )
 
@@ -221,6 +235,27 @@ def _resolve_speed_checks(
             status=status,
         ))
     return results
+
+
+def _whole_clip_estimate_results(
+    manual_estimate: Dict[str, List[int]], count_events: List[dict]
+) -> List[WholeClipEstimateResult]:
+    """Compares predicted whole-clip totals (summed across every counting
+    line - this estimate has no per-line granularity) against a rough,
+    sparse-sampling range a human gave for the whole clip. This is a much
+    weaker check than _count_results: no line, no MAE, just "did the total
+    land in the ballpark a quick watch-through suggested." Never used for
+    the pass/fail gate."""
+    predicted_totals: Dict[str, int] = {}
+    for e in count_events:
+        predicted_totals[e["class"]] = predicted_totals.get(e["class"], 0) + 1
+
+    out = []
+    for cls, (lo, hi) in manual_estimate.items():
+        predicted = predicted_totals.get(cls, 0)
+        status = "within range" if lo <= predicted <= hi else "outside range"
+        out.append(WholeClipEstimateResult(cls, predicted, lo, hi, status))
+    return out
 
 
 def _fragmentation_ratios(count_events: List[dict]) -> Dict[str, Optional[float]]:

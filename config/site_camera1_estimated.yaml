@@ -30,9 +30,10 @@ imgsz: 960
 conf: 0.30
 iou: 0.55
 device: "cpu"
-weights: "models/yolo11s.pt"   # a generic COCO-pretrained checkpoint, not the
-                                # fine-tuned Karachi one - does not exist locally
-                                # yet either, see CLAUDE.md constraint 6
+weights: "models/yolo26n.pt"   # real Ultralytics YOLO26 nano checkpoint, COCO-
+                                # pretrained (not the fine-tuned Karachi one) -
+                                # AGPL-3.0 licensed, gitignored (models/*.pt),
+                                # see the licensing note in this session's summary
 
 # rough estimate from the video frame (1248x576 source), spanning the six
 # main-carriageway lanes only (not the separated bike lane on the right)
@@ -62,7 +63,14 @@ calib_quality: 0.3   # deliberately low - this is an unverified estimate, not a 
 violation_min_conf: 0.80
 rider_model_weights: null
 plate_weights: null
-face_blur_weights: "models/face_yolov8n.pt"
+face_blur_weights: null   # no face-blur checkpoint downloaded - out of scope
+                           # for this session (vehicle detector only). Safe to
+                           # leave off here: neither python -m src.pipeline
+                           # nor tests/eval/run_eval.py persist any frame to
+                           # disk for this clip, so CLAUDE.md constraint 4
+                           # ("faces blurred before a frame touches storage")
+                           # doesn't apply to these runs. Re-enable with a
+                           # real checkpoint before ever writing frames out.
 
 vehicle_classes: [car, bus, truck, motorcycle, pedestrian, bicycle]
 class_source: coco_subset

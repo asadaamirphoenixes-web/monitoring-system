@@ -123,6 +123,17 @@ def _detail_lines(r: ClipResult) -> List[str]:
     for line, ratio in sorted(r.fragmentation.items()):
         if ratio is not None:
             lines.append(f"  fragmentation  {line}: {ratio:.2f} (crossings per probable vehicle)")
+    if r.whole_clip_estimate_results:
+        lines.append(
+            "  whole-clip estimate (ROUGH SANITY CHECK ONLY, not a precise "
+            "measurement - no line granularity, from sparse manual sampling):"
+        )
+        for wr in r.whole_clip_estimate_results:
+            flag = "" if wr.status == "within range" else "  <-- OUTSIDE RANGE"
+            lines.append(
+                f"    {wr.cls_name}: predicted_total={wr.predicted_total} "
+                f"manual_range=[{wr.range_min},{wr.range_max}] {wr.status}{flag}"
+            )
     for s in r.skipped_checks:
         lines.append(f"  skipped: {s}")
     return lines
