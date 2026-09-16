@@ -45,7 +45,9 @@ def plate_token(plate: str) -> str:
     return hmac.new(_KEY, plate.encode(), hashlib.sha256).hexdigest()[:24]
 
 
-def release_plate(plate: str, event_id: str, reason: str, actor: str) -> Optional[str]:
+def release_plate_with_authorization(
+    plate: str, event_id: str, reason: str, actor: str
+) -> Optional[str]:
     """Return the clear-text plate only under authority, and log it."""
     if not ENFORCEMENT_AUTHORISED:
         return None

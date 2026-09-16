@@ -33,7 +33,7 @@ from .anpr import PlateReader
 from .config import SiteConfig
 from .detector import Detector, MockDetector, YoloDetector
 from .homography import GroundPlane
-from .privacy import FaceBlur, plate_token, release_plate
+from .privacy import FaceBlur, plate_token, release_plate_with_authorization
 from .tracker import TrackState
 from .violations import RuleEngine, promote
 
@@ -277,13 +277,13 @@ class TrafficRadar:
 
     def _plate_for_event(self, st: TrackState, c) -> Optional[str]:
         """Never leak a raw plate into an event. Clear text only via
-        release_plate() (gated + audited); otherwise an HMAC token, or
-        nothing at all if no key is configured."""
+        release_plate_with_authorization() (gated + audited); otherwise an
+        HMAC token, or nothing at all if no key is configured."""
         if not st.plate:
             return None
         if c.enforceable:
             event_id = f"{self.cfg.site_id}:{st.track_id}:{c.rule}:{int(c.ts * 1000)}"
-            released = release_plate(
+            released = release_plate_with_authorization(
                 st.plate, event_id=event_id, reason=c.rule, actor=self.cfg.site_id
             )
             if released is not None:
