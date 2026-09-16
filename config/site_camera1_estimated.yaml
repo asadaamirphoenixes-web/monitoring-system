@@ -1,0 +1,57 @@
+# ============================================================================
+# UNVERIFIED, ESTIMATED CALIBRATION - DO NOT TRUST ANY speed_kmh OUTPUT
+# ============================================================================
+# source_polygon and target_size_m below are a rough visual estimate made by
+# looking at video frames (assumed 3.5 m standard lane width x 6 lanes, and a
+# guessed segment length from dashed-line spacing) - NOT a real on-site or
+# satellite-ruler measurement. This exists only so the pipeline can run
+# structurally against tests/eval/clips/day_camera1_arterial_01.mp4 (a real
+# clip, Chinese urban arterial CCTV, not Karachi traffic - see
+# tests/eval/ground_truth/day_camera1_arterial_01.json's notes).
+#
+# Per CLAUDE.md constraint 5 (calibration is external configuration, never
+# hardcoded, never presented as real when it isn't): treat every number in
+# this file as wrong until someone re-measures it on the actual road or from
+# satellite imagery, following the calibration guide in
+# config/site_shahrah_faisal.yaml.
+
+site_id: camera1_estimated
+name: "Unnamed arterial (Camera-1 overlay) - ESTIMATED calibration, unverified"
+rtsp_url: "file:///dev/null"   # this is a recorded clip, not a live camera
+
+fps_target: 15
+imgsz: 960
+conf: 0.30
+iou: 0.55
+device: "cpu"
+weights: "models/ktr_vehicles_yolo11s.pt"   # does not exist yet - see CLAUDE.md constraint 6
+
+# rough estimate from the video frame (1248x576 source), spanning the six
+# main-carriageway lanes only (not the separated bike lane on the right)
+source_polygon:
+  - [290, 145]    # TL
+  - [810, 145]    # TR
+  - [950, 430]    # BR
+  - [120, 430]    # BL
+target_size_m: [21.0, 30.0]   # GUESS: 6 lanes x 3.5 m, ~30 m segment length
+
+count_lines:
+  arterial_mid: [[205, 290], [880, 290]]
+
+lanes: {}          # not measured per-lane - do not enable restricted_lanes against this config
+stop_line: null
+legal_heading: [0.0, 1.0]   # traffic moves toward the camera (increasing y in metric space)
+
+speed_limit_kmh: 60
+min_track_len: 8
+
+congestion_density_thr: 0.09
+congestion_speed_thr: 12.0
+
+restricted_lanes: {}
+no_uturn_zone: null
+calib_quality: 0.3   # deliberately low - this is an unverified estimate, not a real calibration
+violation_min_conf: 0.80
+rider_model_weights: null
+plate_weights: null
+face_blur_weights: "models/face_yolov8n.pt"
