@@ -1,0 +1,66 @@
+# FAKE / EXAMPLE calibration - not a real camera or a real measured site.
+# Same fake 10x10 m patch as config/site_example.yaml; the only thing this
+# file demonstrates is class_source: coco_subset.
+#
+# This is how last session's Chinese arterial test clip
+# (config/site_camera1_estimated.yaml) should have been configured from
+# the start: a demo/test clip from a region with no fine-tuned detector
+# yet, limited to what a generic COCO-pretrained model can already see.
+# It does NOT make detection accuracy region-agnostic - a coco_subset
+# site still only sees car/bus/truck/motorcycle/bicycle/person-class
+# vehicles, nothing like a rickshaw or a water tanker, and still needs a
+# real fine-tuned detector before it can see the rest of a local fleet.
+#
+# Naming note: COCO's own class for people is "person", not "pedestrian".
+# The cross-check in src/detector.py (validate_vehicle_classes) is a
+# literal string comparison - it does not translate "person" for you. If
+# you want "pedestrian" in vehicle_classes to actually match, relabel
+# your detector's own class names to say "pedestrian" instead of "person"
+# (most inference frameworks let you override the loaded model's own
+# name list); otherwise use "person" here, or drop it from this list.
+
+site_id: example_test_site_coco
+name: "Fake test corridor - COCO-only subset"
+rtsp_url: "file:///dev/null"
+
+fps_target: 15
+imgsz: 960
+conf: 0.30
+iou: 0.55
+device: "cpu"
+weights: "models/does-not-exist.pt"
+
+source_polygon:
+  - [0, 0]
+  - [100, 0]
+  - [100, 100]
+  - [0, 100]
+target_size_m: [10.0, 10.0]
+
+count_lines:
+  cordon: [[0, 50], [100, 50]]
+
+lanes:
+  lane_1: [[0, 100], [50, 100], [50, 0], [0, 0]]
+  lane_2: [[50, 100], [100, 100], [100, 0], [50, 0]]
+
+stop_line: [[0, 40], [100, 40]]
+
+legal_heading: [0.0, -1.0]
+
+speed_limit_kmh: 60
+min_track_len: 4
+
+congestion_density_thr: 0.09
+congestion_speed_thr: 12.0
+
+restricted_lanes: {}
+no_uturn_zone: null
+calib_quality: 1.0
+violation_min_conf: 0.80
+rider_model_weights: null
+plate_weights: null
+face_blur_weights: null
+
+vehicle_classes: [car, bus, truck, motorcycle, pedestrian, bicycle]
+class_source: coco_subset   # a mismatch here only warns, it never hard-fails

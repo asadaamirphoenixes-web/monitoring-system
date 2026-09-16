@@ -14,6 +14,15 @@ from typing import Dict, List, Optional
 
 import yaml
 
+# Karachi road-user classes - use exactly these names throughout the
+# codebase, configs, and model label files (CLAUDE.md), unless a site's
+# vehicle_classes says otherwise (e.g. a region with no fine-tuned
+# detector yet - see class_source below).
+KARACHI_VEHICLE_CLASSES: List[str] = [
+    "motorcycle", "car", "rickshaw", "qingqi", "minibus", "bus",
+    "pickup", "truck", "water_tanker", "cart", "pedestrian",
+]
+
 
 @dataclass
 class SiteConfig:
@@ -56,6 +65,28 @@ class SiteConfig:
     # ANPR + privacy (see src/anpr.py, src/privacy.py)
     plate_weights: Optional[str] = None        # plate detector; unset disables ANPR
     face_blur_weights: Optional[str] = "models/face_yolov8n.pt"  # unset disables face blur
+
+    # vehicle taxonomy this site expects to see (see src/detector.py's
+    # validate_vehicle_classes). Defaults to the Karachi list so every
+    # config written before this field existed keeps working unchanged.
+    vehicle_classes: List[str] = field(default_factory=lambda: list(KARACHI_VEHICLE_CLASSES))
+    # "custom": vehicle_classes is a fine-tuned taxonomy - the detector's
+    #   weights MUST know every one of these classes exactly, or the
+    #   detector loader hard-fails rather than silently running with a
+    #   partial/wrong class list.
+    # "coco_subset": vehicle_classes is limited to what a generic
+    #   COCO-pretrained detector can already see (car, bus, truck,
+    #   motorcycle, bicycle, and COCO's "person" if you relabel it to
+    #   "pedestrian" - the cross-check is a literal string match, nothing
+    #   translates "person" for you). For a region with no fine-tuned
+    #   model yet - see config/site_example_coco_only.yaml.
+    class_source: str = "custom"
+
+    def __post_init__(self) -> None:
+        if self.class_source not in ("custom", "coco_subset"):
+            raise ValueError(
+                f"class_source must be 'custom' or 'coco_subset', got {self.class_source!r}"
+            )
 
     @staticmethod
     def load(path: str | Path) -> "SiteConfig":

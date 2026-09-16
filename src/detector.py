@@ -11,11 +11,14 @@ the interface - stays importable without torch/a GPU present.
 
 from __future__ import annotations
 
+import warnings
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 
 import numpy as np
 import supervision as sv
+
+from .config import SiteConfig
 
 
 class Detector(ABC):
@@ -86,3 +89,33 @@ class MockDetector(Detector):
             self._i += 1
             return det
         return self._fixed
+
+
+def validate_vehicle_classes(cfg: SiteConfig, detector: Detector) -> None:
+    """Cross-checks cfg.vehicle_classes against what this detector actually
+    reports. Never silent: a class in vehicle_classes the detector doesn't
+    know will simply never be detected (the water_tanker/rickshaw problem
+    CLAUDE.md warns about) - warn loudly rather than let that be a mystery
+    discovered downstream. This does not by itself make detection accuracy
+    region-agnostic: a coco_subset site is still limited to whatever a
+    generic detector can see, and a custom site still needs a real
+    fine-tuned model for its own classes.
+    """
+    known = set(detector.names.values())
+    expected = set(cfg.vehicle_classes)
+
+    missing = sorted(expected - known)
+    if missing:
+        warnings.warn(
+            f"site '{cfg.site_id}': detector does not know these vehicle_classes - "
+            f"they will NEVER be detected: {missing}",
+            stacklevel=2,
+        )
+
+    extra = sorted(known - expected)
+    if extra:
+        warnings.warn(
+            f"site '{cfg.site_id}': detector also reports classes not in "
+            f"vehicle_classes - they'll be detected then filtered out: {extra}",
+            stacklevel=2,
+        )

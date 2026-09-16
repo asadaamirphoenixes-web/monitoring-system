@@ -58,8 +58,22 @@ The smallest useful version is just this - one manual count for one line:
   reflect a real camera's geometry.
 - `manual_line_counts`: for each counting line name (defined in the site
   config), how many of each vehicle class you counted crossing it by eye.
-  Use exactly these class names: `motorcycle, car, rickshaw, qingqi,
-  minibus, bus, pickup, truck, water_tanker, cart, pedestrian`.
+  Use whatever class names the site config's `vehicle_classes` lists (see
+  below if you're not sure which those are).
+
+### Adding a clip from a region with no fine-tuned model yet
+
+Don't just copy the Karachi class list (`motorcycle, car, rickshaw,
+qingqi, minibus, bus, pickup, truck, water_tanker, cart, pedestrian`)
+into a site config for a different region - a generic detector doesn't
+know most of those classes, and a fine-tuned one for THAT region doesn't
+exist yet either. Instead, point `site_config` at a config with
+`class_source: coco_subset` and a `vehicle_classes` list limited to what
+a generic detector can actually see there - usually some of `car, bus,
+truck, motorcycle, bicycle, pedestrian`. `config/site_example_coco_only.yaml`
+is a template for exactly this. The system will warn (not silently miss)
+if the detector and `vehicle_classes` don't line up - see its own header
+comment for the "person" vs "pedestrian" naming note.
 
 If you also timed a vehicle's speed, add this:
 

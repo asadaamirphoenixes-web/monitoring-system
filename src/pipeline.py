@@ -31,7 +31,7 @@ import supervision as sv
 
 from .anpr import PlateReader
 from .config import SiteConfig
-from .detector import Detector, MockDetector, YoloDetector
+from .detector import Detector, MockDetector, YoloDetector, validate_vehicle_classes
 from .homography import GroundPlane
 from .privacy import FaceBlur, plate_token, release_plate_with_authorization
 from .tracker import TrackState
@@ -40,14 +40,6 @@ from .violations import RuleEngine, promote
 # --------------------------------------------------------------------------
 # Pipeline
 # --------------------------------------------------------------------------
-
-# Karachi road-user classes - use exactly these names throughout the
-# codebase, configs, and model label files (CLAUDE.md).
-VEHICLE_CLASSES = {
-    "motorcycle", "car", "rickshaw", "qingqi", "minibus", "bus",
-    "pickup", "truck", "water_tanker", "cart", "pedestrian",
-}
-
 
 # supervision types class_id/confidence/tracker_id as Optional[np.ndarray]
 # on Detections in general (an empty/uninitialised set has none of them),
@@ -80,9 +72,27 @@ class TrafficRadar:
         detector: Optional[Detector] = None,
     ):
         self.cfg = cfg
-        self.detector = detector or YoloDetector(
-            cfg.weights, imgsz=cfg.imgsz, conf=cfg.conf, iou=cfg.iou, device=cfg.device
-        )
+        if detector is None:
+            # "the detector loader": only this default-construction path
+            # (from cfg.weights) hard-fails on a custom-taxonomy mismatch -
+            # an explicitly-passed detector (MockDetector in tests, or a
+            # caller's own choice) is never hard-failed, only warned about
+            # below via validate_vehicle_classes.
+            detector = YoloDetector(
+                cfg.weights, imgsz=cfg.imgsz, conf=cfg.conf, iou=cfg.iou, device=cfg.device
+            )
+            if cfg.class_source == "custom":
+                missing = sorted(set(cfg.vehicle_classes) - set(detector.names.values()))
+                if missing:
+                    raise RuntimeError(
+                        f"site '{cfg.site_id}' has class_source: custom but its weights "
+                        f"({cfg.weights}) don't know these expected vehicle_classes: "
+                        f"{missing} - fix the weights file or vehicle_classes in the "
+                        "site config."
+                    )
+        self.detector = detector
+        validate_vehicle_classes(cfg, self.detector)
+
         self.tracker = sv.ByteTrack(
             track_activation_threshold=cfg.conf,
             lost_track_buffer=45,
@@ -150,7 +160,7 @@ class TrafficRadar:
         det = self.detector.predict(frame)
         if len(det):
             class_names = [self.detector.names[c] for c in _class_ids(det)]
-            det = cast(sv.Detections, det[np.isin(class_names, list(VEHICLE_CLASSES))])
+            det = cast(sv.Detections, det[np.isin(class_names, self.cfg.vehicle_classes)])
         det = self.tracker.update_with_detections(det)
 
         # blur faces before this frame is used for any stored crop, evidence,
@@ -363,7 +373,7 @@ def main():
 
     detector = None
     if a.mock_detector:
-        names = {i: c for i, c in enumerate(sorted(VEHICLE_CLASSES))}
+        names = {i: c for i, c in enumerate(sorted(cfg.vehicle_classes))}
         detector = MockDetector(names=names)
 
     TrafficRadar(cfg, detector=detector).run(a.source, a.display)
