@@ -1,0 +1,51 @@
+site_id: shahrah_faisal_01
+name: "Shahrah-e-Faisal @ Drigh Road flyover"
+rtsp_url: "rtsp://192.168.1.50:554/cam1"
+fps_target: 15
+imgsz: 960
+conf: 0.30
+iou: 0.55
+device: "cuda:0"
+weights: "models/ktr_vehicles_yolo11s.pt"
+
+# 4 points in the image (clockwise from top-left of the road patch),
+# picked to enclose a flat stretch of carriageway for the ground-plane fit
+source_polygon:
+  - [480, 310]
+  - [1050, 310]
+  - [1180, 700]
+  - [220, 700]
+
+# real-world size of that patch in metres: [width_m, length_m]
+target_size_m: [12.0, 45.0]
+
+# counting lines: {"name": [[x1,y1],[x2,y2]]}
+count_lines:
+  inbound: [[220, 700], [1180, 700]]
+  outbound: [[480, 310], [1050, 310]]
+
+# lane polygons: {"lane_1": [[x,y], ...]}
+lanes:
+  lane_1:
+    - [220, 700]
+    - [560, 700]
+    - [700, 310]
+    - [480, 310]
+  lane_2:
+    - [560, 700]
+    - [900, 700]
+    - [900, 310]
+    - [700, 310]
+
+# stop line for red-light running (optional)
+stop_line:
+  - [220, 500]
+  - [1180, 500]
+
+# direction of legal travel as a unit vector in target (metric) space
+legal_heading: [0.0, -1.0]
+
+speed_limit_kmh: 60.0
+min_track_len: 8
+congestion_density_thr: 0.09
+congestion_speed_thr: 12.0
