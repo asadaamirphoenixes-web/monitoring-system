@@ -8,3 +8,8 @@ PyYAML>=6.0
 # CRNN/TrOCR recogniser to skip this dependency
 paddleocr>=2.9
 paddlepaddle>=2.6
+
+# control-room API (src/api.py)
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.7

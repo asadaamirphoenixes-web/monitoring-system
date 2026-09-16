@@ -2,7 +2,7 @@
 
 Core perception pipeline for Karachi traffic monitoring: RTSP/file -> YOLO
 detection -> ByteTrack -> perspective-corrected speed -> zone counting ->
-violation rule engine -> event bus.
+violation rule engine -> event bus -> control-room API.
 
 Tuned for mixed traffic (motorcycles, rickshaws, Suzuki pickups, water
 tankers, dumpers, donkey carts, pedestrians in the carriageway).
@@ -52,3 +52,16 @@ they gate legal authority rather than site behaviour:
   that every clear-text release is written to.
 
 See `src/privacy.py` for the full design rationale.
+
+## Control-room API
+
+```bash
+uvicorn src.api:app --host 0.0.0.0 --port 8080
+```
+
+SQLite-backed by default (`data/ktradar.db`); point an edge node's
+`on_event` at `POST /ingest/event` to feed it - see `src/api.py` for the
+full endpoint list (`/api/sites`, `/api/flow`, `/api/violations`,
+`/api/hotspots`, `/api/journey`, `/ws/live`). The ingest model accepts the
+flat event dicts `src/pipeline.py` already emits (`class`, `plate`, and any
+rule- or state-specific fields) and normalises them into its stored schema.

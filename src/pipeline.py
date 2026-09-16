@@ -332,8 +332,19 @@ class TrafficRadar:
                             "track_id": tid,
                             "class": st.cls_name,
                             "speed_kmh": st.speed_kmh(),
+                            # journey/re-ID token only - a crossing is never
+                            # an enforcement action, so raw plate never applies
+                            "plate": self._token_for_track(st),
                             "ts": time.time(),
                         })
+
+    def _token_for_track(self, st: TrackState) -> Optional[str]:
+        if not st.plate:
+            return None
+        try:
+            return plate_token(st.plate)
+        except RuntimeError:
+            return None
 
     def _emit_violations(self, det: sv.Detections, frame: np.ndarray, ctx: Dict):
         for i in range(len(det)):
@@ -370,10 +381,7 @@ class TrafficRadar:
             released = release_plate(st.plate, event_id=event_id, reason=c.rule, actor=self.cfg.site_id)
             if released is not None:
                 return released
-        try:
-            return plate_token(st.plate)
-        except RuntimeError:
-            return None
+        return self._token_for_track(st)
 
     def _emit_congestion(self, ts: float, in_patch: int, density: float, mean_v: float):
         if self.frame_idx % (self.cfg.fps_target * 5):   # every ~5 s
