@@ -49,3 +49,11 @@ speed_limit_kmh: 60.0
 min_track_len: 8
 congestion_density_thr: 0.09
 congestion_speed_thr: 12.0
+
+# violation rule engine
+restricted_lanes:
+  lane_1: ["bus", "minibus"]
+no_uturn_zone: null
+calib_quality: 1.0
+violation_min_conf: 0.80
+rider_model_weights: null  # e.g. "models/ktr_helmet_occupancy.pt"

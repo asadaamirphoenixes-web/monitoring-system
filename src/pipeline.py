@@ -30,6 +30,8 @@ import yaml
 from ultralytics import YOLO
 import supervision as sv
 
+from .violations import RuleEngine, promote
+
 
 # --------------------------------------------------------------------------
 # Config
@@ -65,6 +67,13 @@ class SiteConfig:
     min_track_len: int = 8          # frames before speed is trusted
     congestion_density_thr: float = 0.09   # vehicles per m^2
     congestion_speed_thr: float = 12.0     # km/h
+
+    # violation rule engine (see src/violations.py)
+    restricted_lanes: Dict[str, List[str]] = field(default_factory=dict)  # {"lane_bus": ["bus"]}
+    no_uturn_zone: Optional[List[List[int]]] = None
+    calib_quality: float = 1.0      # 0-1, degrades R1 confidence if homography is shaky
+    violation_min_conf: float = 0.80
+    rider_model_weights: Optional[str] = None  # helmet/occupant classifier for R2/R3
 
     @staticmethod
     def load(path: str | Path) -> "SiteConfig":
@@ -159,7 +168,7 @@ VEHICLE_CLASSES = {
 
 
 class TrafficRadar:
-    def __init__(self, cfg: SiteConfig, on_event=None):
+    def __init__(self, cfg: SiteConfig, on_event=None, signal_state_fn=None, rider_model=None):
         self.cfg = cfg
         self.model = YOLO(cfg.weights)
         self.tracker = sv.ByteTrack(
@@ -172,6 +181,11 @@ class TrafficRadar:
         self.tracks: Dict[int, TrackState] = {}
         self.on_event = on_event or (lambda e: print(json.dumps(e)))
         self.frame_idx = 0
+        self.congested = False
+
+        if rider_model is None and cfg.rider_model_weights:
+            rider_model = YOLO(cfg.rider_model_weights)
+        self.rules = RuleEngine(cfg, signal_state_fn=signal_state_fn, rider_model=rider_model)
 
         self.lines = {
             name: sv.LineZone(
@@ -259,8 +273,21 @@ class TrafficRadar:
             if sp is not None and len(st.metric_hist) >= self.cfg.min_track_len:
                 live_speeds.append(sp)
 
+        density = in_patch / max(self.plane.area_m2, 1.0)
+        mean_v = float(np.mean(live_speeds)) if live_speeds else 0.0
+        self.congested = bool(
+            density > self.cfg.congestion_density_thr
+            and mean_v < self.cfg.congestion_speed_thr
+        )
+        ctx = {
+            "calib_quality": self.cfg.calib_quality,
+            "restricted_lanes": self.cfg.restricted_lanes,
+            "no_uturn_zone": self.cfg.no_uturn_zone,
+            "congested": self.congested,
+        }
+        self._emit_violations(det, frame, ctx)
         self._update_counts(det)
-        self._emit_congestion(ts, in_patch, live_speeds)
+        self._emit_congestion(ts, in_patch, density, mean_v)
         self._gc(ts)
 
         return self._annotate(frame, det, live_speeds)
@@ -289,11 +316,33 @@ class TrafficRadar:
                             "ts": time.time(),
                         })
 
-    def _emit_congestion(self, ts: float, in_patch: int, speeds: List[float]):
+    def _emit_violations(self, det: sv.Detections, frame: np.ndarray, ctx: Dict):
+        for i in range(len(det)):
+            tid = int(det.tracker_id[i])
+            st = self.tracks.get(tid)
+            if st is None:
+                continue
+            cands = self.rules.evaluate(st, frame, ctx)
+            if not cands:
+                continue
+            promote(cands, st, min_conf=self.cfg.violation_min_conf)
+            for c in cands:
+                self.on_event({
+                    "type": "violation",
+                    "site": self.cfg.site_id,
+                    "rule": c.rule,
+                    "track_id": c.track_id,
+                    "class": c.cls_name,
+                    "confidence": round(c.confidence, 3),
+                    "enforceable": c.enforceable,
+                    "plate": st.plate,
+                    "detail": c.detail,
+                    "ts": c.ts,
+                })
+
+    def _emit_congestion(self, ts: float, in_patch: int, density: float, mean_v: float):
         if self.frame_idx % (self.cfg.fps_target * 5):   # every ~5 s
             return
-        density = in_patch / max(self.plane.area_m2, 1.0)
-        mean_v = float(np.mean(speeds)) if speeds else 0.0
         los = self._level_of_service(density, mean_v)
         self.on_event({
             "type": "state",
@@ -303,10 +352,7 @@ class TrafficRadar:
             "density_veh_per_m2": round(density, 4),
             "mean_speed_kmh": round(mean_v, 1),
             "los": los,
-            "congested": bool(
-                density > self.cfg.congestion_density_thr
-                and mean_v < self.cfg.congestion_speed_thr
-            ),
+            "congested": self.congested,
         })
 
     @staticmethod
