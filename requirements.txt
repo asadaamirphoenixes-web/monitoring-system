@@ -1,15 +1,34 @@
-ultralytics>=8.3
-supervision>=0.25
-opencv-python>=4.9
+# --- perception ---
+ultralytics>=8.3.0
+supervision>=0.25.0
+# headless: no GUI backend. `python -m src.pipeline --display` (cv2.imshow)
+# needs a real opencv-python installed instead - fine for a dev machine,
+# not for a headless edge box.
+opencv-python-headless>=4.10
 numpy>=1.26
-PyYAML>=6.0
+torch>=2.4            # on Jetson install the NVIDIA JetPack wheel instead
+torchvision>=0.19
 
-# ANPR (src/anpr.py) - default recogniser; swap `ocr=` for a custom
-# CRNN/TrOCR recogniser to skip this dependency
+# --- ANPR ---
 paddleocr>=2.9
-paddlepaddle>=2.6
+paddlepaddle-gpu>=2.6 ; platform_machine != "aarch64"
+rapidfuzz>=3.9
 
-# control-room API (src/api.py)
+# --- service ---
 fastapi>=0.115
 uvicorn[standard]>=0.32
-pydantic>=2.7
+pydantic>=2.9
+pyyaml>=6.0
+httpx>=0.27
+
+# --- analytics / sim ---
+pandas>=2.2
+scikit-learn>=1.5
+eclipse-sumo>=1.20     # adaptive-signal digital twin
+traci>=1.20
+gymnasium>=0.29
+stable-baselines3>=2.3
+
+# --- ops ---
+prometheus-client>=0.21
+python-dotenv>=1.0

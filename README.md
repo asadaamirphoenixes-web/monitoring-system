@@ -53,6 +53,17 @@ they gate legal authority rather than site behaviour:
 
 See `src/privacy.py` for the full design rationale.
 
+## Roadmap
+
+`PROMPTS.md` is the prompt pack for the full project (P0-P9): repo bootstrap,
+detector fine-tuning, a calibration GUI, ANPR, an appeals-grade evidence pack,
+congestion/queue prediction, a SUMO signal-control digital twin, the edge
+agent, the control-room UI, and an evaluation harness. Built so far:
+`src/pipeline.py`, `src/violations.py`, `src/anpr.py`, `src/privacy.py`,
+`src/api.py` (P0/P3/P4-partial). Not yet started: `src/congestion.py`,
+`scripts/calibrate_gui.py`, `src/edge_agent.py`, the evidence-pack/appeal
+flow, `tests/`, and `docker/`.
+
 ## Control-room API
 
 ```bash
