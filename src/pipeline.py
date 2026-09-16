@@ -73,24 +73,29 @@ class TrafficRadar:
     ):
         self.cfg = cfg
         if detector is None:
-            # "the detector loader": only this default-construction path
-            # (from cfg.weights) hard-fails on a custom-taxonomy mismatch -
-            # an explicitly-passed detector (MockDetector in tests, or a
-            # caller's own choice) is never hard-failed, only warned about
-            # below via validate_vehicle_classes.
             detector = YoloDetector(
                 cfg.weights, imgsz=cfg.imgsz, conf=cfg.conf, iou=cfg.iou, device=cfg.device
             )
-            if cfg.class_source == "custom":
-                missing = sorted(set(cfg.vehicle_classes) - set(detector.names.values()))
-                if missing:
-                    raise RuntimeError(
-                        f"site '{cfg.site_id}' has class_source: custom but its weights "
-                        f"({cfg.weights}) don't know these expected vehicle_classes: "
-                        f"{missing} - fix the weights file or vehicle_classes in the "
-                        "site config."
-                    )
         self.detector = detector
+
+        # a custom-taxonomy mismatch hard-fails for any real detector -
+        # built by the default cfg.weights path above, or passed in
+        # directly (including a caller's own YoloDetector) - it's never
+        # safe to run "custom" against a detector that doesn't know the
+        # site's full class list. Only MockDetector gets the warning-only
+        # path below via validate_vehicle_classes: it's explicitly a test/
+        # fixture tool (CLAUDE.md constraint 6), not a real deployment, so
+        # hard-failing it would make it impossible to unit-test a partial
+        # or intentionally-mismatched taxonomy.
+        if cfg.class_source == "custom" and not isinstance(self.detector, MockDetector):
+            missing = sorted(set(cfg.vehicle_classes) - set(self.detector.names.values()))
+            if missing:
+                raise RuntimeError(
+                    f"site '{cfg.site_id}' has class_source: custom but its detector "
+                    f"doesn't know these expected vehicle_classes: {missing} - fix the "
+                    "detector/weights or vehicle_classes in the site config."
+                )
+
         validate_vehicle_classes(cfg, self.detector)
 
         self.tracker = sv.ByteTrack(
