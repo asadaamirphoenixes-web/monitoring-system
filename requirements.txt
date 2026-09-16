@@ -3,3 +3,8 @@ supervision>=0.25
 opencv-python>=4.9
 numpy>=1.26
 PyYAML>=6.0
+
+# ANPR (src/anpr.py) - default recogniser; swap `ocr=` for a custom
+# CRNN/TrOCR recogniser to skip this dependency
+paddleocr>=2.9
+paddlepaddle>=2.6
