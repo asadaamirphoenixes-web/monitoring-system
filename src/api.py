@@ -25,7 +25,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, model_validator
 
@@ -188,12 +188,15 @@ def violations(site: Optional[str] = None, rule: Optional[str] = None,
     q = "SELECT * FROM events WHERE type='violation'"
     args: list = []
     if site:
-        q += " AND site=?"; args.append(site)
+        q += " AND site=?"
+        args.append(site)
     if rule:
-        q += " AND rule=?"; args.append(rule)
+        q += " AND rule=?"
+        args.append(rule)
     if enforceable_only:
         q += " AND enforceable=1"
-    q += " ORDER BY ts DESC LIMIT ?"; args.append(limit)
+    q += " ORDER BY ts DESC LIMIT ?"
+    args.append(limit)
     with closing(db()) as c:
         return [dict(r) for r in c.execute(q, args)]
 

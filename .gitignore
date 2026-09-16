@@ -5,6 +5,7 @@ venv/
 models/*.pt
 *.mp4
 *.avi
+!tests/fixtures/*.mp4
 .DS_Store
 data/
 logs/

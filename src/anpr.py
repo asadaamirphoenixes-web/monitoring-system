@@ -24,11 +24,10 @@ from __future__ import annotations
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import cv2
 import numpy as np
-
 
 # Sindh / Karachi civil formats seen in the wild
 PLATE_PATTERNS = [
@@ -104,8 +103,8 @@ class PlateReader:
             return None
         # join the text lines top-to-bottom (two-line plates are common)
         lines = sorted(res[0], key=lambda x: x[0][0][1])
-        raw = "".join(l[1][0] for l in lines)
-        conf = float(np.mean([l[1][1] for l in lines]))
+        raw = "".join(ln[1][0] for ln in lines)
+        conf = float(np.mean([ln[1][1] for ln in lines]))
         txt = normalise(raw)
         if txt is None:
             return None
@@ -139,7 +138,7 @@ class PlateReader:
         if not self.votes[track_id]:
             return None, 0.0
         w = self.weight[track_id]
-        best = max(w, key=w.get)
+        best = max(w, key=lambda k: w[k])
         total = sum(w.values()) or 1e-9
         agreement = w[best] / total
         n = self.votes[track_id][best]

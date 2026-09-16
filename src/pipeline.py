@@ -1,182 +1,88 @@
 """
 KT-Radar :: core perception pipeline
 ------------------------------------
-RTSP/file -> YOLO detection -> ByteTrack -> perspective speed -> zone counting
-                                         -> violation rule engine -> event bus
+RTSP/file -> detection (src/detector.py) -> ByteTrack -> perspective speed
+(src/homography.py, src/tracker.py) -> zone counting -> violation rule
+engine (src/violations.py) -> event bus -> control-room API (src/api.py)
 
 Designed for Karachi mixed traffic: motorcycle-dominant, rickshaws, Suzuki
 pickups, water tankers, dumpers, donkey carts, pedestrians in carriageway.
 
+Detection goes through the Detector interface (src/detector.py), not a
+concrete YOLO call, so this module runs and is testable without a trained
+model or GPU - see CLAUDE.md constraint 6.
+
 Run:
     python -m src.pipeline --config config/site_shahrah_faisal.yaml
+    python -m src.pipeline --config config/site_example.yaml \\
+        --source tests/fixtures/some_clip.mp4 --mock-detector
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import math
 import time
-from collections import defaultdict, deque
-from dataclasses import dataclass, field, asdict
-from pathlib import Path
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Dict, Optional, cast
 
 import cv2
 import numpy as np
-import yaml
-
-# Ultralytics >= 8.3 (YOLO11 / YOLO26) and supervision >= 0.25
-from ultralytics import YOLO
 import supervision as sv
 
-from .violations import RuleEngine, promote
 from .anpr import PlateReader
+from .config import SiteConfig
+from .detector import Detector, MockDetector, YoloDetector
+from .homography import GroundPlane
 from .privacy import FaceBlur, plate_token, release_plate
-
-
-# --------------------------------------------------------------------------
-# Config
-# --------------------------------------------------------------------------
-
-@dataclass
-class SiteConfig:
-    site_id: str
-    name: str
-    rtsp_url: str
-    fps_target: int = 15
-    imgsz: int = 960
-    conf: float = 0.30
-    iou: float = 0.55
-    device: str = "cuda:0"
-    weights: str = "models/ktr_vehicles_yolo11s.pt"
-
-    # 4 points in the image (clockwise from top-left of the road patch)
-    source_polygon: List[List[int]] = field(default_factory=list)
-    # real-world size of that patch in metres: [width_m, length_m]
-    target_size_m: List[float] = field(default_factory=lambda: [12.0, 45.0])
-
-    # counting lines: {"name": [[x1,y1],[x2,y2]]}
-    count_lines: Dict[str, List[List[int]]] = field(default_factory=dict)
-    # lane polygons: {"lane_1": [[x,y], ...]}
-    lanes: Dict[str, List[List[int]]] = field(default_factory=dict)
-    # stop line for red-light running
-    stop_line: Optional[List[List[int]]] = None
-    # direction of legal travel as a unit vector in target (metric) space
-    legal_heading: List[float] = field(default_factory=lambda: [0.0, -1.0])
-
-    speed_limit_kmh: float = 60.0
-    min_track_len: int = 8          # frames before speed is trusted
-    congestion_density_thr: float = 0.09   # vehicles per m^2
-    congestion_speed_thr: float = 12.0     # km/h
-
-    # violation rule engine (see src/violations.py)
-    restricted_lanes: Dict[str, List[str]] = field(default_factory=dict)  # {"lane_bus": ["bus"]}
-    no_uturn_zone: Optional[List[List[int]]] = None
-    calib_quality: float = 1.0      # 0-1, degrades R1 confidence if homography is shaky
-    violation_min_conf: float = 0.80
-    rider_model_weights: Optional[str] = None  # helmet/occupant classifier for R2/R3
-
-    # ANPR + privacy (see src/anpr.py, src/privacy.py)
-    plate_weights: Optional[str] = None        # plate detector; unset disables ANPR
-    face_blur_weights: Optional[str] = "models/face_yolov8n.pt"  # unset disables face blur
-
-    @staticmethod
-    def load(path: str | Path) -> "SiteConfig":
-        raw = yaml.safe_load(Path(path).read_text())
-        return SiteConfig(**raw)
-
-
-# --------------------------------------------------------------------------
-# Perspective / metric transform  (the thing most repos get wrong)
-# --------------------------------------------------------------------------
-
-class GroundPlane:
-    """Maps image pixels -> bird's-eye metric coordinates via homography.
-
-    Speed computed in pixel space is meaningless: a bike 200 px away moves
-    far fewer pixels per second than the same bike 40 px away. We rectify to
-    a metric plane first, then differentiate.
-    """
-
-    def __init__(self, source_polygon: List[List[int]], target_size_m: List[float]):
-        src = np.array(source_polygon, dtype=np.float32)
-        w, h = float(target_size_m[0]), float(target_size_m[1])
-        dst = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
-        self.M = cv2.getPerspectiveTransform(src, dst)
-        self.area_m2 = w * h
-        self.width_m, self.length_m = w, h
-
-    def to_metric(self, pts_xy: np.ndarray) -> np.ndarray:
-        if pts_xy.size == 0:
-            return pts_xy.reshape(-1, 2)
-        p = pts_xy.astype(np.float32).reshape(-1, 1, 2)
-        return cv2.perspectiveTransform(p, self.M).reshape(-1, 2)
-
-
-# --------------------------------------------------------------------------
-# Track state
-# --------------------------------------------------------------------------
-
-@dataclass
-class TrackState:
-    track_id: int
-    cls_name: str
-    metric_hist: Deque[Tuple[float, float, float]] = field(
-        default_factory=lambda: deque(maxlen=45)
-    )  # (t_seconds, x_m, y_m)
-    boxes: Deque[Tuple[float, np.ndarray]] = field(default_factory=lambda: deque(maxlen=45))
-    lines_crossed: set = field(default_factory=set)
-    last_seen: float = 0.0
-    plate: Optional[str] = None
-    plate_conf: float = 0.0
-    best_crop: Optional[np.ndarray] = None
-    best_crop_score: float = 0.0
-    flags: set = field(default_factory=set)
-
-    def speed_kmh(self, window: float = 1.0) -> Optional[float]:
-        """Least-squares speed over the last `window` seconds. Robust to jitter."""
-        if len(self.metric_hist) < 4:
-            return None
-        t_end = self.metric_hist[-1][0]
-        pts = [p for p in self.metric_hist if t_end - p[0] <= window]
-        if len(pts) < 4:
-            pts = list(self.metric_hist)[-4:]
-        t = np.array([p[0] for p in pts])
-        x = np.array([p[1] for p in pts])
-        y = np.array([p[2] for p in pts])
-        if t[-1] - t[0] < 1e-3:
-            return None
-        vx = np.polyfit(t, x, 1)[0]
-        vy = np.polyfit(t, y, 1)[0]
-        return float(math.hypot(vx, vy) * 3.6)
-
-    def heading(self) -> Optional[np.ndarray]:
-        if len(self.metric_hist) < 6:
-            return None
-        x0, y0 = self.metric_hist[0][1], self.metric_hist[0][2]
-        x1, y1 = self.metric_hist[-1][1], self.metric_hist[-1][2]
-        v = np.array([x1 - x0, y1 - y0], dtype=np.float32)
-        n = np.linalg.norm(v)
-        if n < 1.5:      # less than 1.5 m travelled: heading is noise
-            return None
-        return v / n
-
+from .tracker import TrackState
+from .violations import RuleEngine, promote
 
 # --------------------------------------------------------------------------
 # Pipeline
 # --------------------------------------------------------------------------
 
+# Karachi road-user classes - use exactly these names throughout the
+# codebase, configs, and model label files (CLAUDE.md).
 VEHICLE_CLASSES = {
-    "motorcycle", "car", "rickshaw", "bus", "truck", "tanker",
-    "minibus", "pickup", "tractor", "bicycle", "cart",
+    "motorcycle", "car", "rickshaw", "qingqi", "minibus", "bus",
+    "pickup", "truck", "water_tanker", "cart", "pedestrian",
 }
 
 
+# supervision types class_id/confidence/tracker_id as Optional[np.ndarray]
+# on Detections in general (an empty/uninitialised set has none of them),
+# but by the time we read them here they've always come from a Detector
+# (which sets class_id/confidence) or ByteTrack.update_with_detections
+# (which sets tracker_id) - never from an empty Detections. These narrow
+# that contract in one place instead of asserting it at every call site.
+def _class_ids(det: sv.Detections) -> np.ndarray:
+    assert det.class_id is not None
+    return det.class_id
+
+
+def _confidences(det: sv.Detections) -> np.ndarray:
+    assert det.confidence is not None
+    return det.confidence
+
+
+def _tracker_ids(det: sv.Detections) -> np.ndarray:
+    assert det.tracker_id is not None
+    return det.tracker_id
+
+
 class TrafficRadar:
-    def __init__(self, cfg: SiteConfig, on_event=None, signal_state_fn=None, rider_model=None):
+    def __init__(
+        self,
+        cfg: SiteConfig,
+        on_event=None,
+        signal_state_fn=None,
+        rider_model=None,
+        detector: Optional[Detector] = None,
+    ):
         self.cfg = cfg
-        self.model = YOLO(cfg.weights)
+        self.detector = detector or YoloDetector(
+            cfg.weights, imgsz=cfg.imgsz, conf=cfg.conf, iou=cfg.iou, device=cfg.device
+        )
         self.tracker = sv.ByteTrack(
             track_activation_threshold=cfg.conf,
             lost_track_buffer=45,
@@ -190,6 +96,8 @@ class TrafficRadar:
         self.congested = False
 
         if rider_model is None and cfg.rider_model_weights:
+            from ultralytics import YOLO  # lazy: only needed if this feature is enabled
+
             rider_model = YOLO(cfg.rider_model_weights)
         self.rules = RuleEngine(cfg, signal_state_fn=signal_state_fn, rider_model=rider_model)
 
@@ -233,19 +141,16 @@ class TrafficRadar:
                 if cv2.waitKey(1) & 0xFF == 27:
                     break
         cap.release()
-        cv2.destroyAllWindows()
+        if display:
+            cv2.destroyAllWindows()
 
     # ---------------- per-frame ----------------
 
     def process(self, frame: np.ndarray, ts: float) -> np.ndarray:
-        res = self.model.predict(
-            frame, imgsz=self.cfg.imgsz, conf=self.cfg.conf,
-            iou=self.cfg.iou, device=self.cfg.device, verbose=False,
-        )[0]
-        det = sv.Detections.from_ultralytics(res)
-        det = det[np.isin(
-            [self.model.names[c] for c in det.class_id], list(VEHICLE_CLASSES)
-        )] if len(det) else det
+        det = self.detector.predict(frame)
+        if len(det):
+            class_names = [self.detector.names[c] for c in _class_ids(det)]
+            det = cast(sv.Detections, det[np.isin(class_names, list(VEHICLE_CLASSES))])
         det = self.tracker.update_with_detections(det)
 
         # blur faces before this frame is used for any stored crop, evidence,
@@ -262,8 +167,8 @@ class TrafficRadar:
         live_speeds, in_patch = [], 0
 
         for i in range(len(det)):
-            tid = int(det.tracker_id[i])
-            cls = self.model.names[int(det.class_id[i])]
+            tid = int(_tracker_ids(det)[i])
+            cls = self.detector.names[int(_class_ids(det)[i])]
             st = self.tracks.get(tid) or TrackState(tid, cls)
             st.last_seen = ts
             mx, my = float(metric[i][0]), float(metric[i][1])
@@ -279,7 +184,7 @@ class TrafficRadar:
             x1, y1, x2, y2 = det.xyxy[i].astype(int)
             crop = frame_pub[max(0, y1):y2, max(0, x1):x2]
             if crop.size:
-                score = crop.shape[0] * crop.shape[1] * float(det.confidence[i])
+                score = crop.shape[0] * crop.shape[1] * float(_confidences(det)[i])
                 if score > st.best_crop_score:
                     st.best_crop_score, st.best_crop = score, crop.copy()
                 if self.plates is not None:
@@ -320,7 +225,7 @@ class TrafficRadar:
                 for i, flag in enumerate(crossed_in | crossed_out):
                     if not flag:
                         continue
-                    tid = int(det.tracker_id[i])
+                    tid = int(_tracker_ids(det)[i])
                     key = f"line:{name}"
                     st = self.tracks.get(tid)
                     if st and key not in st.lines_crossed:
@@ -348,7 +253,7 @@ class TrafficRadar:
 
     def _emit_violations(self, det: sv.Detections, frame: np.ndarray, ctx: Dict):
         for i in range(len(det)):
-            tid = int(det.tracker_id[i])
+            tid = int(_tracker_ids(det)[i])
             st = self.tracks.get(tid)
             if st is None:
                 continue
@@ -378,7 +283,9 @@ class TrafficRadar:
             return None
         if c.enforceable:
             event_id = f"{self.cfg.site_id}:{st.track_id}:{c.rule}:{int(c.ts * 1000)}"
-            released = release_plate(st.plate, event_id=event_id, reason=c.rule, actor=self.cfg.site_id)
+            released = release_plate(
+                st.plate, event_id=event_id, reason=c.rule, actor=self.cfg.site_id
+            )
             if released is not None:
                 return released
         return self._token_for_track(st)
@@ -400,11 +307,16 @@ class TrafficRadar:
 
     @staticmethod
     def _level_of_service(density: float, mean_v: float) -> str:
-        if density < 0.02 and mean_v > 40: return "A"
-        if density < 0.04 and mean_v > 30: return "B"
-        if density < 0.06 and mean_v > 22: return "C"
-        if density < 0.09 and mean_v > 15: return "D"
-        if density < 0.13: return "E"
+        if density < 0.02 and mean_v > 40:
+            return "A"
+        if density < 0.04 and mean_v > 30:
+            return "B"
+        if density < 0.06 and mean_v > 22:
+            return "C"
+        if density < 0.09 and mean_v > 15:
+            return "D"
+        if density < 0.13:
+            return "E"
         return "F"
 
     def _gc(self, ts: float, ttl: float = 6.0):
@@ -421,12 +333,12 @@ class TrafficRadar:
         lab = sv.LabelAnnotator(text_scale=0.4, text_thickness=1)
         labels = []
         for i in range(len(det)):
-            tid = int(det.tracker_id[i])
+            tid = int(_tracker_ids(det)[i])
             st = self.tracks.get(tid)
             sp = st.speed_kmh() if st else None
             flags = "!" + ",".join(sorted(st.flags)) if st and st.flags else ""
             labels.append(
-                f"#{tid} {self.model.names[int(det.class_id[i])]}"
+                f"#{tid} {self.detector.names[int(_class_ids(det)[i])]}"
                 + (f" {sp:.0f}km/h" if sp else "") + flags
             )
         out = box.annotate(frame.copy(), det)
@@ -444,9 +356,17 @@ def main():
     ap.add_argument("--config", required=True)
     ap.add_argument("--source", default=None, help="override rtsp with a video file")
     ap.add_argument("--display", action="store_true")
+    ap.add_argument("--mock-detector", action="store_true",
+                     help="use MockDetector instead of real YOLO weights - no model/GPU needed")
     a = ap.parse_args()
     cfg = SiteConfig.load(a.config)
-    TrafficRadar(cfg).run(a.source, a.display)
+
+    detector = None
+    if a.mock_detector:
+        names = {i: c for i, c in enumerate(sorted(VEHICLE_CLASSES))}
+        detector = MockDetector(names=names)
+
+    TrafficRadar(cfg, detector=detector).run(a.source, a.display)
 
 
 if __name__ == "__main__":

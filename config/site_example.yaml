@@ -1,0 +1,49 @@
+# FAKE / EXAMPLE calibration - not a real camera or a real measured site.
+# Used by tests/ and --mock-detector smoke runs. Do not deploy against a
+# real camera with these values (see CLAUDE.md constraint 5: calibration
+# is external configuration, measured on the actual road, never hardcoded
+# or copied from an example).
+
+site_id: example_test_site
+name: "Fake test corridor"
+rtsp_url: "file:///dev/null"     # unused when --source or a mock is given
+
+fps_target: 15
+imgsz: 960
+conf: 0.30
+iou: 0.55
+device: "cpu"
+weights: "models/does-not-exist.pt"   # never loaded when --mock-detector is used
+
+# a simple 10x10 m square directly below the camera - easy to hand-verify
+source_polygon:
+  - [0, 0]
+  - [100, 0]
+  - [100, 100]
+  - [0, 100]
+target_size_m: [10.0, 10.0]
+
+count_lines:
+  cordon: [[0, 50], [100, 50]]
+
+lanes:
+  lane_1: [[0, 100], [50, 100], [50, 0], [0, 0]]
+  lane_2: [[50, 100], [100, 100], [100, 0], [50, 0]]
+
+stop_line: [[0, 40], [100, 40]]
+
+legal_heading: [0.0, -1.0]
+
+speed_limit_kmh: 60
+min_track_len: 4
+
+congestion_density_thr: 0.09
+congestion_speed_thr: 12.0
+
+restricted_lanes: {}
+no_uturn_zone: null
+calib_quality: 1.0
+violation_min_conf: 0.80
+rider_model_weights: null
+plate_weights: null
+face_blur_weights: null   # no real face model in tests

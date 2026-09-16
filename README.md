@@ -1,26 +1,58 @@
 # KT-Radar
 
-Core perception pipeline for Karachi traffic monitoring: RTSP/file -> YOLO
+Core perception pipeline for Karachi traffic monitoring: RTSP/file ->
 detection -> ByteTrack -> perspective-corrected speed -> zone counting ->
 violation rule engine -> event bus -> control-room API.
 
 Tuned for mixed traffic (motorcycles, rickshaws, Suzuki pickups, water
-tankers, dumpers, donkey carts, pedestrians in the carriageway).
+tankers, dumpers, donkey carts, pedestrians in the carriageway). See
+`CLAUDE.md` for the non-negotiable design constraints (speed is never
+computed in pixel space, nothing is enforceable on one rule firing,
+privacy-by-default, calibration is never hardcoded, every module is
+testable without a trained model).
 
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt          # or requirements-dev.txt for tests/lint/types
 ```
 
 Place trained detector weights under `models/` (see `weights` in the site
-config) and configure a site in `config/`.
+config) and configure a site in `config/`. `config/site_example.yaml` is
+a fake/labelled-as-such fixture for tests, not a real camera.
 
 ## Run
 
 ```bash
 python -m src.pipeline --config config/site_shahrah_faisal.yaml
 python -m src.pipeline --config config/site_shahrah_faisal.yaml --source path/to/video.mp4 --display
+
+# no trained weights or GPU needed - runs against a MockDetector instead:
+python -m src.pipeline --config config/site_example.yaml \
+    --source tests/fixtures/some_clip.mp4 --mock-detector
+```
+
+## Modules
+
+- `src/config.py` - `SiteConfig`, loaded from per-camera YAML
+- `src/homography.py` - `GroundPlane`, the pixel -> metric ground-plane transform
+- `src/tracker.py` - `TrackState`, including the least-squares `speed_kmh()`
+- `src/detector.py` - the `Detector` interface, `YoloDetector`, and
+  `MockDetector` (lets everything downstream be developed/tested without a
+  trained model or GPU)
+- `src/violations.py` - the rule engine and the candidate -> enforceable
+  promotion gate
+- `src/anpr.py` - two-stage plate localisation + OCR with temporal voting
+- `src/privacy.py` - face blurring, HMAC plate tokens, gated+audited release
+- `src/pipeline.py` - `TrafficRadar`, wiring all of the above together
+- `src/api.py` - the control-room ingest/query/live-feed API
+
+## Tests
+
+```bash
+pytest              # CPU-only, no network, no GPU - uses MockDetector + config/site_example.yaml
+ruff check .
+mypy src/
 ```
 
 ## Site configuration
@@ -60,9 +92,10 @@ detector fine-tuning, a calibration GUI, ANPR, an appeals-grade evidence pack,
 congestion/queue prediction, a SUMO signal-control digital twin, the edge
 agent, the control-room UI, and an evaluation harness. Built so far:
 `src/pipeline.py`, `src/violations.py`, `src/anpr.py`, `src/privacy.py`,
-`src/api.py` (P0/P3/P4-partial). Not yet started: `src/congestion.py`,
-`scripts/calibrate_gui.py`, `src/edge_agent.py`, the evidence-pack/appeal
-flow, `tests/`, and `docker/`.
+`src/api.py`, `src/config.py`, `src/homography.py`, `src/tracker.py`,
+`src/detector.py`, `tests/` (P0/P3/P4-partial). Not yet started:
+`src/congestion.py`, `scripts/calibrate_gui.py`, `src/edge_agent.py`, the
+evidence-pack/appeal flow, and `docker/`.
 
 ## Control-room API
 
