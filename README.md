@@ -32,3 +32,23 @@ Each site is a YAML file (see `config/site_shahrah_faisal.yaml`) defining:
 - `count_lines` and `lanes`: counting and lane-occupancy zones
 - `stop_line` and `legal_heading`: for violation detection
 - `speed_limit_kmh`, `congestion_density_thr`, `congestion_speed_thr`: analytics thresholds
+- `restricted_lanes`, `no_uturn_zone`, `rider_model_weights`: violation rule engine (see `src/violations.py`)
+- `plate_weights`, `face_blur_weights`: ANPR and face blurring (see `src/anpr.py`, `src/privacy.py`)
+
+## Privacy
+
+Faces are blurred before any frame is used for a stored crop, evidence, or
+display (`face_blur_weights`, on by default). Plates are never written to an
+event in clear text - only an HMAC-SHA256 token, unless a violation has been
+promoted to `enforceable` and the deployment is explicitly authorised to
+release it. This is controlled by environment variables, not config, since
+they gate legal authority rather than site behaviour:
+
+- `KTR_PLATE_HMAC_KEY`: required to compute plate tokens at all; without it,
+  `plate` is omitted from every event rather than falling back to raw text.
+- `KTR_ENFORCEMENT_AUTHORISED=1`: required before any clear-text plate is
+  ever released, and only for candidates already promoted to `enforceable`.
+- `KTR_AUDIT_LOG`: append-only log path (default `logs/plate_access.jsonl`)
+  that every clear-text release is written to.
+
+See `src/privacy.py` for the full design rationale.

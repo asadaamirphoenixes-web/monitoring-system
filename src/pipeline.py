@@ -31,6 +31,8 @@ from ultralytics import YOLO
 import supervision as sv
 
 from .violations import RuleEngine, promote
+from .anpr import PlateReader
+from .privacy import FaceBlur, plate_token, release_plate
 
 
 # --------------------------------------------------------------------------
@@ -74,6 +76,10 @@ class SiteConfig:
     calib_quality: float = 1.0      # 0-1, degrades R1 confidence if homography is shaky
     violation_min_conf: float = 0.80
     rider_model_weights: Optional[str] = None  # helmet/occupant classifier for R2/R3
+
+    # ANPR + privacy (see src/anpr.py, src/privacy.py)
+    plate_weights: Optional[str] = None        # plate detector; unset disables ANPR
+    face_blur_weights: Optional[str] = "models/face_yolov8n.pt"  # unset disables face blur
 
     @staticmethod
     def load(path: str | Path) -> "SiteConfig":
@@ -187,6 +193,9 @@ class TrafficRadar:
             rider_model = YOLO(cfg.rider_model_weights)
         self.rules = RuleEngine(cfg, signal_state_fn=signal_state_fn, rider_model=rider_model)
 
+        self.plates = PlateReader(cfg.plate_weights) if cfg.plate_weights else None
+        self.face_blur = FaceBlur(cfg.face_blur_weights) if cfg.face_blur_weights else None
+
         self.lines = {
             name: sv.LineZone(
                 start=sv.Point(*pts[0]), end=sv.Point(*pts[1])
@@ -239,6 +248,10 @@ class TrafficRadar:
         )] if len(det) else det
         det = self.tracker.update_with_detections(det)
 
+        # blur faces before this frame is used for any stored crop, evidence,
+        # or display - detection above already ran on the unblurred frame
+        frame_pub = self.face_blur(frame) if self.face_blur else frame
+
         if len(det):
             # anchor = bottom-centre of box == tyre contact patch on the road
             anchors = det.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)
@@ -260,13 +273,19 @@ class TrafficRadar:
                 in_patch += 1
             st.boxes.append((ts, det.xyxy[i].copy()))
 
-            # keep the sharpest, largest crop for ANPR / evidence
+            # keep the sharpest, largest crop for evidence, and feed every
+            # frame's crop to ANPR - temporal voting needs one read per frame,
+            # not repeated reads of a single cached crop
             x1, y1, x2, y2 = det.xyxy[i].astype(int)
-            crop = frame[max(0, y1):y2, max(0, x1):x2]
+            crop = frame_pub[max(0, y1):y2, max(0, x1):x2]
             if crop.size:
                 score = crop.shape[0] * crop.shape[1] * float(det.confidence[i])
                 if score > st.best_crop_score:
                     st.best_crop_score, st.best_crop = score, crop.copy()
+                if self.plates is not None:
+                    st.plate, st.plate_conf = self.plates.accumulate(
+                        tid, self.plates.read(crop)
+                    )
 
             self.tracks[tid] = st
             sp = st.speed_kmh()
@@ -290,7 +309,7 @@ class TrafficRadar:
         self._emit_congestion(ts, in_patch, density, mean_v)
         self._gc(ts)
 
-        return self._annotate(frame, det, live_speeds)
+        return self._annotate(frame_pub, det, live_speeds)
 
     # ---------------- analytics ----------------
 
@@ -335,10 +354,26 @@ class TrafficRadar:
                     "class": c.cls_name,
                     "confidence": round(c.confidence, 3),
                     "enforceable": c.enforceable,
-                    "plate": st.plate,
+                    "plate": self._plate_for_event(st, c),
                     "detail": c.detail,
                     "ts": c.ts,
                 })
+
+    def _plate_for_event(self, st: TrackState, c) -> Optional[str]:
+        """Never leak a raw plate into an event. Clear text only via
+        release_plate() (gated + audited); otherwise an HMAC token, or
+        nothing at all if no key is configured."""
+        if not st.plate:
+            return None
+        if c.enforceable:
+            event_id = f"{self.cfg.site_id}:{st.track_id}:{c.rule}:{int(c.ts * 1000)}"
+            released = release_plate(st.plate, event_id=event_id, reason=c.rule, actor=self.cfg.site_id)
+            if released is not None:
+                return released
+        try:
+            return plate_token(st.plate)
+        except RuntimeError:
+            return None
 
     def _emit_congestion(self, ts: float, in_patch: int, density: float, mean_v: float):
         if self.frame_idx % (self.cfg.fps_target * 5):   # every ~5 s
@@ -368,6 +403,8 @@ class TrafficRadar:
         dead = [k for k, v in self.tracks.items() if ts - v.last_seen > ttl]
         for k in dead:
             self.tracks.pop(k, None)
+            if self.plates is not None:
+                self.plates.drop(k)
 
     # ---------------- overlay ----------------
 
