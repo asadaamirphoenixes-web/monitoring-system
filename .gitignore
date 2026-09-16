@@ -9,3 +9,4 @@ models/*.pt
 .DS_Store
 data/
 logs/
+tests/eval/results/*.md
